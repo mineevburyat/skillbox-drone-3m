@@ -1,12 +1,18 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+@author: Regislab
+"""
+
 from matplotlib import pyplot as plt
 
 
-class PitchSimpleDynamic:
-    def __init__(self, pitch, pitch_velocity, pitch_accel, k_b, m, l, pitch_target):
+class VehicleSimpleDynamic:
+    def __init__(self, mass, base_l, k_b, Tcmd, accInit, velInit, angInit):
         '''
-
-        :param mass: масса аппарата
-        :type mass: float
+        :param mass:  масса 
+        :param base_l: длинна между двигателями
+        :type base_l: float
         :param k_b: коэффициент тяги двигателя
         :type k_b: float
         :param rotorCount: количество двигателей в системе
@@ -19,36 +25,27 @@ class PitchSimpleDynamic:
         :type posInit: float
 
         '''
-        self.pitch = pitch
-        self.pitch_velocity = pitch_velocity
-        self.pith_accel = pitch_accel
+        self.mass = mass
+        self.base_l = base_l
         self.k_b = k_b
-        self.inertion = 0.5 * pow(l, 2) * m
-        self.T = 20
-        self.delta_t = 0.05
-        self.pitch_target = pitch_target
-        # Величина ускорения свободного падения
+        self.Tcmd = Tcmd
+        self.angular_acceleration = accInit
+        self.angular_velocity = velInit
+        self.angular = angInit
         self.g = 9.81 
 
-    def rightParts(self, rotorsAngularVel):
+    def rightParts(self, impact):
         '''
 
-        :param rotorsAngularVel: угловая скорость двигателей
-        :type rotorsAngularVel: float
+        :param Tcmd: необходимая тяга двигателей
+        :type Tcmd: float
 
         '''
-        # Для всех двигателей рассчитаем суммарную тягу
-        rotorsAngularVelSum = 0
-        for i in range(self.rotorCount):
-            # суммируем квадрат заданной угловой скорости для всех двигателей
-            rotorsAngularVelSum += rotorsAngularVel**2
-        # Вычисляем ускорение нашей системы.
-        # Получаем силу тяги создаваемую всеми двигателями 
-        # согласно нашей математической модели Fтяги = Kb * omega^2
-        # После для получения текущего ускорения разделим полученное значение 
-        # на массу и вычтем ускорение свободного падения действующие на аппарат
-        self.acceleration = (
-            self.k_b * rotorsAngularVelSum) / self.mass - self.g
+        
+        self.w1 = impact + self.Tcmd
+        self.w2 = -impact + self.Tcmd
+        self.torque = self.k_b * self.base_l * (self.w1 ** 2 - self.w2 ** 2)
+        self.angular_acceleration = self.torque / (self.base_l * self.mass ** 2)
 
     def integrate(self, dt):
         '''
@@ -57,10 +54,8 @@ class PitchSimpleDynamic:
         :type dt: float
 
         '''
-        # интегрируем ускорение методом эйлера
-        self.velocity += self.acceleration * dt
-        # Полученную скорость интегрируем для определения местоположения
-        self.position += self.velocity * dt
+        self.angular_velocity += self.angular_acceleration * dt
+        self.angular += self.angular_velocity * dt
 
     def calculatePosition(self, u, dt):
         '''
@@ -126,24 +121,22 @@ class ControlSystem():
         self.k_p = k_p
         self.k_i = k_i
         self.k_d = k_d
-        self.desiredPosition = 0
+        self.desiredPinch = 0
         self.error = 0
         self.errorPast = 0
         self.integral = 0
         self.controlLimit = controlLimit
 
-    def setDesiredPosition(self, desiredPosition):
+    def setDesiredPinch(self, desiredPinch):
         '''
 
         :param desiredPosition: целевое положение ЛА
         :type desiredPosition: float
 
         '''
-        # данный метод устанавливает целевое положение ЛА,
-        # к которому система с течением времени будет стремиться(в нашем примере это высота)
-        self.desiredPosition = desiredPosition
+        self.desiredPinch = desiredPinch
 
-    def PID(self, currentPosition, dt):
+    def PID(self, currentPinch, dt):
         '''
 
         :param currentPosition: текущее положение ЛА
@@ -152,16 +145,11 @@ class ControlSystem():
         :type dt: float
 
         '''
-        # Вычислим функцию ошибки
-        self.error = self.desiredPosition - currentPosition
-        # Вычисляем интеграл ошибки
+        self.error = self.desiredPinch - currentPinch
         self.integral += self.error * dt
-        # Получим рассчетную управляющую угловую скорость двигателей при помощи ПИД регулятора
         u = self.k_p * self.error + self.k_i * self.integral + \
             self.k_d * ((self.error - self.errorPast) / dt)
-        # Установим предыдущую ошибку для использования в дальнейших итерациях
         self.errorPast = self.error
-        # Вызовем звено насыщения для ограничения максимального управляющего воздействия
         u = self.saturation(u)
         return u
 
@@ -174,14 +162,10 @@ class ControlSystem():
         :rtype: float
 
         '''
-        # Звено насыщения ограничивает размер входного параметра
-        # На выходе метода,абсолютное значение не может быть больше 
-        # заданного предела controlLimit
         if inputVal > self.controlLimit:
             inputVal = self.controlLimit
         elif inputVal < -self.controlLimit:
             inputVal = - self.controlLimit
-
         return inputVal
 
 
@@ -216,30 +200,16 @@ class Simulator():
        с шагом dt
 
         '''
-        # Задаем 0 время и начинаем рассчет до тех пор пока 
-        # время не достигнет конечного значения Tend
         time = 0
         while (time <= self.Tend):
-            # получаем положение ЛА
-            pose = self.dynamicModel.getPosition()
-            # Получаем скорость ЛА
-            vel = self.dynamicModel.getVelocity()
-            # Получаем ускорение ЛА
-            acc = self.dynamicModel.getAcceleration()
-            # Записываем полученные значения в списки
-            # для дальнейшего построения графиков
-            self.posList.append(pose)
-            self.velList.append(vel)
-            self.accList.append(acc)
-            # self.timeList.append(time)
+            self.posList.append(self.dynamicModel.getPosition())
+            self.velList.append(self.dynamicModel.getVelocity())
+            self.accList.append(self.dynamicModel.getAcceleration())
+            self.timeList.append(time)
 
             # рассчитываем новое управляющие воздействие
-            # на основе текущего положения(pose) ЛА 
-            u = self.controlSys.PID(pose, self.dt)
-            # Рассчитываем положение ЛА с учетом полученного
-            # управляющего воздействия 
+            u = self.controlSys.PID(self.dynamicModel.getPosition(), self.dt)
             self.dynamicModel.calculatePosition(u, self.dt)
-            # увеличиваем время на dt, то есть на шаг моделирования
             time += self.dt
 
     def showPlots(self):
@@ -249,19 +219,20 @@ class Simulator():
 
         '''
         f = plt.figure(constrained_layout=True)
+        
         gs = f.add_gridspec(3, 5)
         ax1 = f.add_subplot(gs[0, :-1])
-        ax1.plot(self.posList)
+        ax1.plot(self.timeList, self.posList)
         ax1.grid()
         ax1.set_title('position')
 
         ax2 = f.add_subplot(gs[1, :-1])
-        ax2.plot(self.velList, "g")
+        ax2.plot(self.timeList, self.velList, "g")
         ax2.grid()
         ax2.set_title('velocity')
 
         ax3 = f.add_subplot(gs[2, :-1])
-        ax3.plot(self.accList, "r")
+        ax3.plot(self.timeList, self.accList, "r")
         ax3.grid()
         ax3.set_title('acceleration')
 
@@ -271,21 +242,21 @@ class Simulator():
 '''
  Объявим параметры для моделирования
 '''
-k_p = 300 #коэффициент Пропорционального регулирования
-k_i = 100 #коэффициент Интегрального регулирования
-k_d = 220 #коэффициент Дифференциального регулирования
+k_p = 100 #коэффициент Пропорционального регулирования
+k_i = 10 #коэффициент Интегрального регулирования
+k_d = 80 #коэффициент Дифференциального регулирования
 dt = 0.01 # шаг моделирования системы (например одна сотая секунды)
 
 Tend = 20 # конечное время моделирования (например 20 сек)
 
 # Масса ЛА
-mass = 0.012
+mass = 0.006
 # Коэффициент тяги двигателя ЛА
 k_b = 3.9865e-08
 # Количество двигателей ЛА
 rotorCount = 4
 # Ограничение на угловую скорость двигателей рад/сек
-motorSpeedLimit = 2000
+motorSpeedLimit = 3000
 
 '''
 Создадим объект контроллера и объект для нашей математической модели
@@ -295,7 +266,7 @@ uavSimpleDynamic = VehicleSimpleDynamic(mass, k_b, rotorCount, 0, 0, 0)
 '''
 Установим целевое положение для нашей системы
 '''
-controller.setDesiredPosition(10)
+controller.setDesiredPosition(20)
 
 
 """
